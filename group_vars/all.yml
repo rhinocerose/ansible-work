@@ -1,0 +1,12 @@
+---
+
+base_packages:
+  - python3
+  - python-apt
+  - python3-pip
+  - git
+  - vim
+  - unzip
+  - zip
+  - htop
+  - tmux
