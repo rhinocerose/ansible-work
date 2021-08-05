@@ -1,0 +1,237 @@
+---
+- name: Change file ownership, group and permissions
+  become: yes
+  ansible.builtin.file:
+    path: /root/.ansible/tmp
+    owner: root
+    group: root
+    state: directory
+    mode: 0777
+  tags:
+    - always
+
+- name: Set local timezone
+  file:
+    src: /usr/share/zoneinfo/{{ time_zone }}
+    path: /etc/localtime
+    state: link
+  tags:
+    - timezone
+    - selfhosted
+
+- name: Setup locales
+  block:
+    - name: Configure locale.gen for US-only
+      lineinfile:
+        dest: /etc/locale.gen
+        regexp: '{{ item.regex }}'
+        line: '{{ item.line }}'
+      loop:
+        - {regex: 'en_GB.UTF-8 UTF-8', line: '# en_GB.UTF-8 UTF-8'}
+        - {regex: 'en_US.UTF-8 UTF-8', line: en_US.UTF-8 UTF-8}
+    - name: Generate locales
+      command: locale-gen
+    - name: Set locale
+      command: update-locale LANG=en_US.UTF-8
+  tags:
+    - locales
+    - selfhosted
+
+- name: Setup keyboard
+  lineinfile:
+    dest: /etc/default/keyboard
+    regexp: 'XKBLAYOUT=gb'
+    line: 'XKBLAYOUT=us'
+  tags:
+    - keyboard
+    - selfhosted
+
+- name: Set hostname
+  copy:
+    content: '{{ inventory_hostname }}'
+    dest: /etc/hostname
+    mode: 0700
+    owner: root
+    group: root
+  tags:
+    - hostname
+    - selfhosted
+
+- name: Set localhost entry
+  lineinfile:
+    path: /etc/hosts
+    line: 127.0.0.1 {{ inventory_hostname }}
+    owner: root
+    group: root
+    mode: 0644
+  tags:
+    - selfhosted
+
+- name: Set up sudo
+  block:
+    - name: Create wheel group
+      group:
+        name: wheel
+    - name: Give passwordless sudo access to wheel group
+      copy:
+        content: '%wheel ALL=(ALL) NOPASSWD: ALL'
+        dest: /etc/sudoers.d/wheel
+        validate: /usr/sbin/visudo --check --file=%s
+        owner: root
+        group: root
+        mode: 0440
+  tags:
+    - sudo
+    - selfhosted
+
+- name: Enable ssh
+  service:
+    name: ssh
+    enabled: yes
+  tags:
+    - ssh
+    - selfhosted
+
+- name: Setup user account
+  become: yes
+  block:
+    - name: Create new user account
+      user:
+        name: '{{ user_name }}'
+        password: '{{ user_password }}'
+        groups: wheel
+        append: yes
+
+    - name: Create user's ssh directory
+      file:
+        path: /home/{{ user_name }}/.ssh
+        mode: 0700
+        owner: '{{ user_name }}'
+        group: '{{ user_name }}'
+        state: directory
+
+    - name: Add hardened SSH config
+      template:
+        src: "sshd_config.j2"
+        dest: /etc/ssh/sshd_config
+        owner: root
+        group: root
+        mode: 0600
+  tags:
+    - user_account
+    - selfhosted
+
+- name: Copy over ed25519 ssh key from current Ansible controller as an authorized key
+  become: yes
+  lineinfile:
+    create: yes
+    line: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOO2YxvAg4LpRRXpDtnGzfyiXo2Qj1C+fvDw2ZkxhI0i draws@LAPTOP-RHHGOLNQ'
+    dest: /home/{{ user_name }}/.ssh/authorized_keys
+    mode: 0600
+    owner: '{{ user_name }}'
+    group: '{{ user_name }}'
+  tags:
+    - user_account
+    - selfhosted
+
+- name: Copy over ed25519 ssh key for reverse tunnel
+  become: yes
+  lineinfile:
+    create: yes
+    line: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOeFFIzJ3JhlumkXRe7EM7f9gI3Uj7c/pRzSNGcVNwmv ssh-server@localhost'
+    dest: /home/{{ user_name }}/.ssh/authorized_keys
+    mode: 0600
+    owner: '{{ user_name }}'
+    group: '{{ user_name }}'
+  tags:
+    - user_account
+
+- name: Ensure old WPA supplicant is absent
+  file:
+    path: /etc/wpa_supplicant/wpa_supplicant.conf
+    state: absent
+  tags:
+    - selfhosted
+
+- name: Copy new WPA supplicant
+  copy:
+    src: "wpa_supplicant.conf"
+    dest: "/etc/wpa_supplicant/wpa_supplicant.conf"
+    owner: root
+    group: root
+    mode: 0644
+
+- name: Enable reconfiguring of WiFi
+  become: yes
+  block:
+    - name: Try to Configure Wifi
+      command: "wpa_cli -i wlan0 reconfigure"
+  rescue:
+    - name: Try to Configure Wifi Again after Failure
+      command: "wpa_cli -i wlan0 reconfigure"
+
+- name: Enable reconfiguring of WiFi
+  become: yes
+  block:
+    - name: Try to Unblock WiFi on rfkill
+      command: "rfkill unblock all"
+  rescue:
+    - name: Try to Unblock WiFi on rfkill Again after Failure
+      command: "rfkill unblock all"
+
+- name: Enable reconfiguring of WiFi
+  become: yes
+  block:
+    - name: Try to Set WLAN0 as UP
+      command: "ip link set wlan0 up"
+  rescue:
+    - name: Try to Set WLAN0 as UP Again after Failure
+      command: "ip link set wlan0 up"
+
+- name: Enable SPI interface for CAN hat
+  become: yes
+  blockinfile:
+    path: /boot/config.txt
+    block: |
+      dtparam=spi=on 
+      dtoverlay=mcp2515-can0,oscillator=12000000,interrupt=25,spimaxfrequency=2000000 
+  tags:
+    - selfhosted
+
+- name: Disable Pi 4 specific options
+  lineinfile:
+    dest: /boot/config.txt
+    regexp: '[pi4]'
+    line: '#[pi4]'
+  tags:
+    - selfhosted
+
+- name: Tasks done as the new user
+  block:
+    - name: Delete pi user
+      become: yes
+      block:
+        - name: Delete pi user account
+          user:
+            name: pi
+            force: yes
+            state: absent
+            remove: yes
+        - name: Remove passwordless sudo access for pi account
+          file:
+            path: /etc/sudoers.d/010_pi-nopasswd
+            state: absent
+      tags:
+        - delete_pi
+    - name: Reboot
+      reboot:
+        connect_timeout: 60
+        reboot_timeout: 90
+      failed_when: false
+      tags:
+        - reboot
+  vars:
+    ansible_user: '{{ user_name }}'
+  tags:
+    - new_user
+    - selfhosted
