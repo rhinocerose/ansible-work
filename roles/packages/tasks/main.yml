@@ -1,0 +1,77 @@
+---
+# Notify the reboot handler many times just to ensure whenever the build task is run the r3000 is restarted
+- name: Change file ownership, group and permissions
+  become: yes
+  ansible.builtin.file:
+    path: /root/.ansible/tmp
+    owner: root
+    group: root
+    state: directory
+    mode: 0777
+  tags:
+    - always
+
+- name: Update apt packages
+  become: yes
+  apt:
+    update_cache: yes
+    cache_valid_time: 86400
+  notify: Reboot
+  tags:
+    - selfhosted
+    - update
+    - build
+
+- name: Update all packages to the latest version
+  become: yes
+  apt:
+    upgrade: dist
+  notify: Reboot
+  tags:
+    - selfhosted
+    - build
+
+- name: Install apt packages
+  become: yes
+  apt:
+    pkg: "{{ base_packages }}"
+  notify: Reboot
+  tags:
+    - update
+    - selfhosted
+    - build
+
+- name: Install python-can pip package
+  pip:
+    name: python-can
+    executable: pip3
+  tags:
+    - update
+    - build
+
+- name: Install ansible
+  pip:
+    name:
+      - ansible==2.10
+    executable: pip3
+  notify: Reboot
+  tags:
+    - build
+
+- name: Install roles from Ansible Galaxy
+  command: "/home/anzen/.local/bin/ansible-galaxy install {{ item.role_name }}"
+  args:
+    creates: "/home/anzen/.ansible/roles/{{ item.role_path }}"
+  loop: "{{ ansible_roles_list }}"
+  notify: Reboot
+  tags:
+    - build
+
+- name: Install collections from Ansible Galaxy
+  command: "/home/anzen/.local/bin/ansible-galaxy collection install {{ item.collection_name }}"
+  args:
+    creates: "/home/anzen/.ansible/collections/ansible_collections/{{ item.collection_path }}"
+  loop: "{{ ansible_collection_list }}"
+  notify: Reboot
+  tags:
+    - build
