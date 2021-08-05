@@ -1,0 +1,6 @@
+---
+- name: Install all packages
+  import_tasks: provision.yml
+  tags:
+    - base
+    - provision
